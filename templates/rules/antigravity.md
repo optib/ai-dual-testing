@@ -1,6 +1,6 @@
 ---
 name: ai-dual-testing
-description: Smart dual-track verification skill powered by multi-agent subtask delegation. Trigger with "verify" to test and report coverage.
+description: Smart dual-track verification skill with execution contract and test preservation. Trigger with "verify" to test and report coverage.
 ---
 
 ## AI Testing — Execution Contract Verification Skill
@@ -22,21 +22,18 @@ description: Smart dual-track verification skill powered by multi-agent subtask 
 > `[STEP-N] ✅ Mô tả kết quả`
 > Nếu bước thất bại: `[STEP-N] ❌ Lý do thất bại`
 
-#### STEP 1: Lock Requirements (Chống trôi kết quả)
+#### STEP 1: Check & Lock Requirements (Chống trôi kết quả)
 
 **Tool calls bắt buộc:** `read_file` → `.ai-testing/configs/requirements.json`
 
 1. Đọc file `.ai-testing/configs/requirements.json`
-2. Nếu `locked: true` → Dùng đúng danh sách requirements đã lock. KHÔNG thêm/bớt/đổi ID.
+2. Nếu `locked: true`:
+   - Dùng ĐÚNG danh sách requirements đã lock và checksum. KHÔNG thêm/bớt/đổi ID hay sửa đổi nội dung.
 3. Nếu `locked: false` hoặc `requirements: []`:
-   - Đọc requirement từ conversation context / PRD / README
+   - Đọc requirement từ user request ban đầu / PRD / README.
    - Lập danh sách cố định với ID: R01, R02, R03...
    - Ghi vào `requirements.json` với `locked: true`, `lockedAt: <timestamp>`
-   - Format mỗi requirement:
-     ```json
-     { "id": "R01", "description": "Mô tả", "acceptanceCriteria": "Điều kiện", "priority": "HIGH", "type": "FUNCTIONAL" }
-     ```
-4. Output: `[STEP-1] ✅ Requirements locked: {N} items`
+4. Output: `[STEP-1] ✅ Requirements verified: {N} items (locked: {locked})`
 
 #### STEP 2: Code Mapping (Phân tích Codebase)
 
@@ -49,30 +46,34 @@ description: Smart dual-track verification skill powered by multi-agent subtask 
 2. Ghi lại: Requirement ID → File path → Status
 3. Output: `[STEP-2] ✅ Code mapping done: {passed}/{total} PASS, {failed}/{total} FAIL`
 
-#### STEP 3: Test Execution (Chạy Vitest + Playwright)
+#### STEP 3: Test Execution & Test Preservation (Vitest + Playwright)
 
 **Tool calls bắt buộc:**
+- `run_command` → `npx tsx .ai-testing/scripts/test-writer.ts --feature {feature} --code "{testCode}"` (để tạo hoặc merge test an toàn, KHÔNG ghi đè file test cũ)
 - `run_command` → `npx vitest run` (nếu có vitest)
-- `write_to_file` → `.ai-testing/e2e/{feature}.spec.ts` (tạo E2E test)
 - `run_command` → `npx playwright test .ai-testing/e2e/ --config .ai-testing/configs/playwright.config.ts`
 
-> [!IMPORTANT] PHẢI chạy test cho cả phần PASS và FAIL từ Step 2.
-> Phần PASS → verify đúng. Phần FAIL → confirm thiếu.
+> [!IMPORTANT] BẢO TỒN TEST SUITE
+> - BẮT BUỘC dùng script `test-writer.ts` để ghi test — KHÔNG gọi `write_to_file` trực tiếp đè lên file `.spec.ts`.
+> - Nếu file test đã tồn tại và requirements không đổi: giữ nguyên và chạy lại test suite, KHÔNG sinh lại.
+> - PHẢI chạy test cho cả phần PASS và FAIL từ Step 2.
+> - Script `verify.ts` sẽ fail nếu bất kỳ test nào không pass exit code 0.
 
 1. Chạy unit test: `npx vitest run` (nếu project có vitest)
-2. Tạo E2E test files trong `.ai-testing/e2e/{feature}.spec.ts`
+2. Ghi / merge E2E test bằng script: `npx tsx .ai-testing/scripts/test-writer.ts --feature {feature} --code "{testCode}"`
 3. Chạy Playwright: `npx playwright test .ai-testing/e2e/ --config .ai-testing/configs/playwright.config.ts`
-4. Chụp screenshot: Mobile (375px), Tablet (768px), Desktop (1920px)
+4. Chụp screenshot UI evidence: Mobile (375px), Tablet (768px), Desktop (1920px)
 5. Output: `[STEP-3] ✅ Tests run: {N} spec files, {M} screenshots captured`
 
-#### STEP 4: Viết RTM Files (BẮT BUỘC trước khi gọi verify.ts)
+#### STEP 4: Viết Timestamped RTM Files (Version Hóa Lịch Sử)
 
-**Tool calls bắt buộc:** `write_to_file` → `.ai-testing/reports/{feature}.rtm.json`
+**Tool calls bắt buộc:** `write_to_file` → `.ai-testing/reports/{feature}-{timestamp}.rtm.json`
 
-> [!CRITICAL] PHẢI tạo file .rtm.json TRƯỚC khi chạy verify.ts.
-> Đây là bước quan trọng nhất mà trước đây thường bị skip.
+> [!CRITICAL] LƯU THEO TIMESTAMP ĐỂ GIỮ LỊCH SỬ
+> Format tên file: `.ai-testing/reports/{feature}-{YYYYMMDDTHHmm}.rtm.json` (ví dụ: `auth-20260821T1630.rtm.json`).
+> KHÔNG ghi đè lên file RTM của các lần chạy trước đó.
 
-1. Với MỖI feature đã test, tạo file `.ai-testing/reports/{feature}.rtm.json`:
+1. Với MỖI feature đã test, tạo file `.ai-testing/reports/{feature}-{timestamp}.rtm.json`:
    ```json
    {
      "feature": "tên feature",
@@ -90,42 +91,27 @@ description: Smart dual-track verification skill powered by multi-agent subtask 
      ]
    }
    ```
-2. Requirement IDs trong .rtm.json PHẢI khớp 1:1 với requirements.json
-3. Status chỉ được dùng: `✅` (pass), `❌` (fail), `⚠️` (partial/warning)
-4. Output: `[STEP-4] ✅ RTM files written: {file1}, {file2}...`
+2. Requirement IDs trong .rtm.json PHẢI khớp 1:1 với requirements.json.
+3. Output: `[STEP-4] ✅ Timestamped RTM written: {file}`
 
-#### STEP 5: Master Report (Tổng hợp)
+#### STEP 5: Master Report & Diff (Tổng hợp & Phát hiện hồi quy)
 
 **Tool calls bắt buộc:** `run_command` → `npx tsx .ai-testing/scripts/verify.ts`
 
 1. Chạy: `npx tsx .ai-testing/scripts/verify.ts`
 2. Đọc output và trình bày cho user:
-   - **Bảng RTM** (Requirement Traceability Matrix)
-   - **Gap Report** (Severity: 🔴 High, 🟡 Medium, 🟢 Low)
-   - **Coverage %** (Requirement Coverage + Code Coverage)
-3. Output: `[STEP-5] ✅ verify.ts executed: {pct}% coverage`
+   - **Kết quả thực thi Test Runner** (Exit code của Vitest & Playwright)
+   - **Bảng Master RTM & Coverage %**
+   - **Diff & Regression Warning** (Nếu có requirement bị drop hoặc status bị hạ chuẩn)
+3. Output: `[STEP-5] ✅ verify.ts completed`
 
 > [!IMPORTANT] KHÔNG tự ý sửa code — chỉ báo cáo kết quả và chờ user quyết định.
 
 ---
 
-### Non-Functional Checks (Bắt buộc — dùng tool calls)
-
-| Check | Tool call bắt buộc |
-|-------|--------------------|
-| Security | `grep_search` tìm `innerHTML`, `eval(`, `dangerouslySetInnerHTML`, hardcoded secrets |
-| Performance | Đọc build output hoặc chạy `du -sh dist/` nếu có |
-| Accessibility | `grep_search` tìm `aria-label`, `role=`, `tabIndex` trong components |
-| SEO | `grep_search` tìm `<title>`, `<meta`, `<h1` trong pages |
-| Error UX | `grep_search` tìm `loading`, `error`, `empty` states |
-| Mobile | `grep_search` tìm `@media`, responsive breakpoints |
-
----
-
 ### Quy tắc bắt buộc
 1. PHẢI hoàn thành đủ 5 STEP với checkpoint output.
-2. PHẢI tạo `.rtm.json` files TRƯỚC khi gọi `verify.ts`.
-3. PHẢI dùng requirement IDs từ `requirements.json` — KHÔNG tự sinh ID mới.
-4. PHẢI chụp screenshot nếu có Playwright và có UI.
-5. File test E2E PHẢI lưu trong `.ai-testing/e2e/` — KHÔNG tạo trong `src/`.
-6. KHÔNG skip bước nào. Nếu bước thất bại → ghi checkpoint ❌ và tiếp tục bước sau.
+2. BẮT BUỘC dùng `test-writer.ts` để ghi test; KHÔNG ghi đè file `.spec.ts` trực tiếp.
+3. PHẢI lưu file RTM theo timestamp để duy trì lịch sử và đối soát hồi quy (diff).
+4. KHÔNG tự ý sửa nội dung hay ID trong `requirements.json` đã locked.
+5. Exit code của `verify.ts` được quyết định bởi kết quả thực tế của test runner.

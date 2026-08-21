@@ -1,8 +1,9 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "locked": false,
   "lockedAt": null,
-  "description": "Master Requirements — AI will populate on first verify, then lock for consistency",
+  "checksum": null,
+  "description": "Master Requirements — Locked upfront with SHA-256 checksum",
   "requirements": [],
   "_schema": {
     "_comment": "Each requirement must follow this format",
@@ -11,6 +12,6 @@
     "acceptanceCriteria": "Điều kiện chấp nhận",
     "priority": "HIGH | MEDIUM | LOW",
     "type": "FUNCTIONAL | NON_FUNCTIONAL",
-    "source": "conversation | PRD | README"
+    "source": "cli_lock | conversation | PRD | README"
   }
 }

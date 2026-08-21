@@ -1,7 +1,7 @@
 /**
  * Verify Script — AI Dual-Track Testing
  *
- * Orchestrates: Pre-validate → Run Tests → Aggregate RTM → Generate Coverage Report.
+ * Orchestrates: Integrity Check → Static Analysis Audit (Anti-Dummy Test) → Run Tests (Enforce Exit Code) → Aggregate RTM → Generate Coverage Report.
  * Usage: npx tsx .ai-testing/scripts/verify.ts
  * Exit: 0 = PASS, 1 = FAIL
  */
@@ -9,6 +9,8 @@
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import { execSync } from 'child_process';
+import { createHash } from 'crypto';
+import { auditAllE2ETests } from './test-auditor';
 
 const CWD = process.cwd();
 const ROOT = resolve(CWD, '.ai-testing');
@@ -17,101 +19,109 @@ const SCREENSHOTS_DIR = resolve(REPORTS_DIR, 'screenshots');
 const PKG_PATH = resolve(CWD, 'package.json');
 const REQUIREMENTS_PATH = resolve(ROOT, 'configs', 'requirements.json');
 
-function runCommandQuietly(cmd: string) {
+function computeRequirementsChecksum(requirements: any[]): string {
+  const normalized = JSON.stringify(requirements || []);
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
+function runCommandStrict(cmd: string): { success: boolean; error?: string } {
   try {
     console.log(`   $ ${cmd}`);
     execSync(cmd, { cwd: CWD, stdio: 'inherit' });
-    return true;
-  } catch (e) {
-    console.warn(`   ⚠️ Command exited with errors: ${cmd}`);
-    return false;
+    return { success: true };
+  } catch (e: any) {
+    const msg = e.message || `Command failed: ${cmd}`;
+    console.error(`\n❌ [TEST FAILURE] Execution failed for command: ${cmd}`);
+    return { success: false, error: msg };
   }
 }
 
-// ─── PRE-VALIDATION ──────────────────────────────────────
-function preValidate(): { valid: boolean; reqCount: number; reqIds: string[] } {
-  console.log('\n🔍 Pre-validation...\n');
-  let hasErrors = false;
+// ─── PRE-VALIDATION & INTEGRITY CHECK ───────────────────
+function preValidate(): { valid: boolean; reqCount: number; reqIds: string[]; error?: string } {
+  console.log('\n🔍 Pre-validation & Integrity Check...\n');
 
-  // Check requirements.json exists and has items
   if (!existsSync(REQUIREMENTS_PATH)) {
-    console.error('❌ FAIL: .ai-testing/configs/requirements.json not found.');
-    console.error('   AI must create requirements.json in STEP 1 before running verify.');
-    hasErrors = true;
-    return { valid: false, reqCount: 0, reqIds: [] };
+    const error = 'requirements.json not found in .ai-testing/configs/. Run `npx ai-dual-testing lock` or populate requirements first.';
+    console.error(`❌ FAIL: ${error}`);
+    return { valid: false, reqCount: 0, reqIds: [], error };
   }
 
   let reqData: any;
   try {
     reqData = JSON.parse(readFileSync(REQUIREMENTS_PATH, 'utf-8'));
   } catch (e) {
-    console.error('❌ FAIL: requirements.json is not valid JSON.');
-    return { valid: false, reqCount: 0, reqIds: [] };
+    const error = 'requirements.json is not valid JSON.';
+    console.error(`❌ FAIL: ${error}`);
+    return { valid: false, reqCount: 0, reqIds: [], error };
   }
 
   const reqs = reqData.requirements || [];
   if (reqs.length === 0) {
-    console.error('❌ FAIL: requirements.json has 0 requirements.');
-    console.error('   AI must populate requirements in STEP 1 before running verify.');
-    hasErrors = true;
-    return { valid: false, reqCount: 0, reqIds: [] };
+    const error = 'requirements.json has 0 requirements.';
+    console.error(`❌ FAIL: ${error}`);
+    return { valid: false, reqCount: 0, reqIds: [], error };
+  }
+
+  // Integrity Check if locked and checksum exists
+  if (reqData.locked && reqData.checksum) {
+    const currentHash = computeRequirementsChecksum(reqs);
+    if (currentHash !== reqData.checksum) {
+      const error = 'requirements.json checksum mismatch! Requirements were tampered with after lock.';
+      console.error(`❌ FAIL: ${error}`);
+      console.error(`   Expected: ${reqData.checksum}`);
+      console.error(`   Actual:   ${currentHash}`);
+      return { valid: false, reqCount: reqs.length, reqIds: [], error };
+    }
+    console.log(`   🔒 Integrity verified: Checksum match (${reqData.checksum.slice(0, 10)}...)`);
   }
 
   const reqIds = reqs.map((r: any) => r.id);
   console.log(`   ✅ requirements.json: ${reqs.length} requirements (locked: ${reqData.locked || false})`);
 
-  // Check .rtm.json files exist
-  const rtmFiles = existsSync(REPORTS_DIR)
-    ? readdirSync(REPORTS_DIR).filter(f => f.endsWith('.rtm.json'))
-    : [];
-
-  if (rtmFiles.length === 0) {
-    console.warn('   ⚠️ WARNING: No .rtm.json files in reports/. AI must create these in STEP 4.');
-  } else {
-    console.log(`   ✅ RTM files: ${rtmFiles.length} found`);
-
-    // Cross-validate: check RTM requirement IDs match requirements.json
-    const rtmReqIds = new Set<string>();
-    for (const file of rtmFiles) {
-      try {
-        const data = JSON.parse(readFileSync(resolve(REPORTS_DIR, file), 'utf-8'));
-        for (const r of data.requirements || []) {
-          rtmReqIds.add(r.id);
-        }
-      } catch {}
-    }
-
-    const missingInRtm = reqIds.filter((id: string) => !rtmReqIds.has(id));
-    const orphanInRtm = [...rtmReqIds].filter(id => !reqIds.includes(id));
-
-    if (missingInRtm.length > 0) {
-      console.warn(`   ⚠️ Requirements missing from RTM: ${missingInRtm.join(', ')}`);
-    }
-    if (orphanInRtm.length > 0) {
-      console.warn(`   ⚠️ Orphan IDs in RTM (not in requirements.json): ${orphanInRtm.join(', ')}`);
-    }
-  }
-
-  return { valid: !hasErrors, reqCount: reqs.length, reqIds };
+  return { valid: true, reqCount: reqs.length, reqIds };
 }
 
 function main() {
-  console.log('\n🔍 AI Dual-Track Verification Runner\n');
+  console.log('\n🔍 AI Dual-Track Verification Runner');
   console.log('═'.repeat(50));
 
-  // Ensure dirs exist
   if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
   if (!existsSync(SCREENSHOTS_DIR)) mkdirSync(SCREENSHOTS_DIR, { recursive: true });
 
-  // PRE-VALIDATE
+  // 1. PRE-VALIDATE & INTEGRITY CHECK
   const validation = preValidate();
   if (!validation.valid) {
     console.error('\n' + '═'.repeat(50));
-    console.error('\n❌ Pre-validation FAILED. Fix issues above before running verify.\n');
+    console.error(`\n❌ Pre-validation FAILED: ${validation.error}\n`);
     process.exit(1);
   }
 
-  // 1. Detect Installed Test Tools
+  // 2. LAYER 2: STATIC ANALYSIS AUDIT (ANTI-DUMMY TEST)
+  const e2eDir = resolve(ROOT, 'e2e');
+  if (!existsSync(e2eDir)) mkdirSync(e2eDir, { recursive: true });
+  const thresholdsPath = resolve(ROOT, 'configs', 'thresholds.json');
+
+  console.log('\n🔍 Static Analysis Audit (Anti-Dummy Test Detection)...');
+  const audit = auditAllE2ETests(e2eDir, thresholdsPath);
+
+  if (!audit.valid) {
+    console.error('\n❌ [STATIC AUDIT FAILED] Dummy / Tautological tests detected in test suite:');
+    for (const [file, violations] of audit.fileViolations.entries()) {
+      console.error(`\n   📁 File: .ai-testing/e2e/${file}`);
+      for (const v of violations) {
+        console.error(`      - Test: "${v.testTitle}"`);
+        console.error(`        Type: ${v.type}`);
+        console.error(`        Detail: ${v.details}`);
+        if (v.snippet) console.error(`        Snippet: ${v.snippet}`);
+      }
+    }
+    console.error('\n🚨 Verification REJECTED: Test suite contains fake or empty tests designed to inflate results.\n');
+    process.exit(1);
+  } else {
+    console.log(`   ✅ Static audit passed: ${audit.totalFiles} spec file(s) checked, 0 dummy tests found.`);
+  }
+
+  // 3. Detect Installed Test Tools
   let hasVitest = false;
   let hasPlaywright = false;
 
@@ -124,18 +134,22 @@ function main() {
     } catch {}
   }
 
-  // 2. Execute Automated Tests if available
+  let testExecutionFailed = false;
+  const executionErrors: string[] = [];
+
+  // 4. Execute Automated Tests with STRICT EXIT CODE CHECKING
   if (hasVitest) {
-    console.log('\n⚡ Running Vitest Unit Tests...');
-    runCommandQuietly('npx vitest run');
+    console.log('\n⚡ Running Vitest Unit Tests (Exit code enforced)...');
+    const result = runCommandStrict('npx vitest run');
+    if (!result.success) {
+      testExecutionFailed = true;
+      executionErrors.push('Vitest unit tests failed or crashed with non-zero exit code');
+    }
   }
 
-  const e2eDir = resolve(ROOT, 'e2e');
-  if (!existsSync(e2eDir)) mkdirSync(e2eDir, { recursive: true });
   let e2eSpecs = readdirSync(e2eDir).filter(f => f.endsWith('.spec.ts') || f.endsWith('.spec.js'));
 
   if (hasPlaywright) {
-    // If no spec files exist, auto-create a default smoke spec
     if (e2eSpecs.length === 0) {
       const smokeSpecPath = resolve(e2eDir, 'smoke.spec.ts');
       const smokeContent = `import { test, expect } from '@playwright/test';
@@ -148,116 +162,92 @@ test('Smoke E2E Test — Homepage UI verification & screenshot', async ({ page }
 `;
       try {
         writeFileSync(smokeSpecPath, smokeContent, 'utf-8');
-        console.log('   ✅ Auto-created .ai-testing/e2e/smoke.spec.ts');
+        console.log('   ✅ Preserved default .ai-testing/e2e/smoke.spec.ts');
         e2eSpecs = ['smoke.spec.ts'];
       } catch (e) {}
     }
 
-    console.log(`\n🎭 Running Playwright E2E Tests (${e2eSpecs.length} spec file(s))...`);
+    console.log(`\n🎭 Running Playwright E2E Tests (${e2eSpecs.length} spec file(s)) (Exit code enforced)...`);
     const configFile = resolve(ROOT, 'configs', 'playwright.config.ts');
     const configFlag = existsSync(configFile) ? `--config "${configFile}"` : '';
-    runCommandQuietly(`npx playwright test "${e2eDir}" ${configFlag}`);
+    const result = runCommandStrict(`npx playwright test "${e2eDir}" ${configFlag}`);
+    if (!result.success) {
+      testExecutionFailed = true;
+      executionErrors.push('Playwright E2E tests failed or crashed with non-zero exit code');
+    }
   }
 
-  // 3. Parse RTM files
+  // 5. Parse RTM files
   const rtmFiles = existsSync(REPORTS_DIR)
     ? readdirSync(REPORTS_DIR).filter(f => f.endsWith('.rtm.json'))
     : [];
 
+  let rtmPassCount = 0;
+  let totalReportedReqs = 0;
+
   if (rtmFiles.length === 0) {
     console.log('\n⚠️  No .rtm.json files found in .ai-testing/reports/');
-    console.log('   AI must create these files in STEP 4 before running verify.\n');
   } else {
-    let totalReqs = 0, passed = 0, failed = 0, pending = 0;
-    const features: Array<{name: string, passed: number, total: number, gaps: string[]}> = [];
+    console.log(`\n📋 Found ${rtmFiles.length} RTM file(s) for documentation & traceability.`);
+    const rtmReqIds = new Set<string>();
 
     for (const file of rtmFiles) {
       try {
         const data = JSON.parse(readFileSync(resolve(REPORTS_DIR, file), 'utf-8'));
-        const fPassed = (data.requirements || []).filter((r: any) => r.status === '✅').length;
-        const fFailed = (data.requirements || []).filter((r: any) => r.status === '❌').length;
-        const fTotal = (data.requirements || []).length;
-        const gaps = (data.requirements || [])
-          .filter((r: any) => r.status !== '✅')
-          .map((r: any) => `${r.id}: ${r.description} (${r.status})`);
-
-        features.push({ name: data.feature || file, passed: fPassed, total: fTotal, gaps });
-        totalReqs += fTotal;
-        passed += fPassed;
-        failed += fFailed;
-        pending += fTotal - fPassed - fFailed;
+        for (const r of data.requirements || []) {
+          rtmReqIds.add(r.id);
+          totalReportedReqs++;
+          if (r.status === '✅') rtmPassCount++;
+        }
       } catch (e) {
         console.warn(`⚠️  Could not parse ${file}`);
       }
     }
 
-    // Use requirements.json count as denominator for accurate coverage
-    const baselineCount = validation.reqCount;
-    const pct = baselineCount > 0 ? Math.round((passed / baselineCount) * 1000) / 10 : 0;
-
-    console.log(`\n📋 Features tested: ${features.length}`);
-    console.log(`📊 Requirements: ${passed}/${baselineCount} = ${pct}% (baseline from requirements.json)`);
-
-    if (totalReqs < baselineCount) {
-      console.warn(`⚠️  Only ${totalReqs}/${baselineCount} requirements found in RTM files. Missing requirements not tested.`);
-    }
-
-    for (const f of features) {
-      const fPct = f.total > 0 ? Math.round((f.passed / f.total) * 1000) / 10 : 0;
-      const icon = fPct >= 95 ? '✅' : fPct >= 70 ? '🟡' : '❌';
-      console.log(`\n   ${icon} ${f.name}: ${f.passed}/${f.total} = ${fPct}%`);
-      if (f.gaps.length > 0) {
-        for (const gap of f.gaps) {
-          console.log(`      ❌ ${gap}`);
-        }
-      }
+    const missingInRtm = validation.reqIds.filter(id => !rtmReqIds.has(id));
+    if (missingInRtm.length > 0) {
+      console.warn(`   ⚠️ Missing requirement IDs in RTM reports: ${missingInRtm.join(', ')}`);
     }
   }
 
-  // 4. Aggregate Master RTM & Coverage Report
+  // 6. Aggregate Master RTM & Coverage Report & Diff
   const masterRtmScript = resolve(ROOT, 'scripts', 'master-rtm.ts');
   if (existsSync(masterRtmScript)) {
     console.log('\n📝 Generating Master RTM...');
-    runCommandQuietly(`npx tsx "${masterRtmScript}"`);
+    runCommandStrict(`npx tsx "${masterRtmScript}"`);
   }
 
   const coverageReportScript = resolve(ROOT, 'scripts', 'coverage-report.ts');
   if (existsSync(coverageReportScript)) {
     console.log('\n📊 Generating Dual Coverage Report...');
-    runCommandQuietly(`npx tsx "${coverageReportScript}"`);
+    runCommandStrict(`npx tsx "${coverageReportScript}"`);
   }
 
-  // 5. Check screenshots
-  const screenshots = existsSync(SCREENSHOTS_DIR)
-    ? readdirSync(SCREENSHOTS_DIR).filter(f => f.endsWith('.png') || f.endsWith('.jpg'))
-    : [];
-
-  if (screenshots.length > 0) {
-    console.log(`\n📸 Screenshots: ${screenshots.length} file(s) in .ai-testing/reports/screenshots/`);
+  const diffRtmScript = resolve(ROOT, 'scripts', 'diff-rtm.ts');
+  if (existsSync(diffRtmScript)) {
+    console.log('\n🔍 Checking RTM History & Regressions...');
+    runCommandStrict(`npx tsx "${diffRtmScript}"`);
   }
 
-  // 6. Final verdict
-  const rtmFilesFinal = existsSync(REPORTS_DIR)
-    ? readdirSync(REPORTS_DIR).filter(f => f.endsWith('.rtm.json'))
-    : [];
-  let finalPassed = 0, finalTotal = 0;
-  for (const file of rtmFilesFinal) {
-    try {
-      const data = JSON.parse(readFileSync(resolve(REPORTS_DIR, file), 'utf-8'));
-      for (const r of data.requirements || []) {
-        finalTotal++;
-        if (r.status === '✅') finalPassed++;
-      }
-    } catch {}
-  }
-
-  const finalPct = validation.reqCount > 0 ? Math.round((finalPassed / validation.reqCount) * 1000) / 10 : 0;
-  const overallPass = finalPct >= 95;
+  // 7. Final Verdict based on:
+  // - Real Exit Codes of Test Runners (Vitest & Playwright)
+  // - No Integrity Check Failures
+  // - No Static Analysis Dummy Test Violations
+  const isPass = !testExecutionFailed;
 
   console.log('\n' + '═'.repeat(50));
-  console.log(`\n🏁 Verification Complete: ${finalPassed}/${validation.reqCount} = ${finalPct}% ${overallPass ? '✅ PASS' : '❌ FAIL'}\n`);
-
-  process.exit(overallPass ? 0 : 1);
+  if (!isPass) {
+    console.error('\n🏁 Verification Result: ❌ FAIL');
+    for (const err of executionErrors) {
+      console.error(`   - ${err}`);
+    }
+    console.error('\nExit code determined by actual test runner status.\n');
+    process.exit(1);
+  } else {
+    console.log('\n🏁 Verification Result: ✅ PASS');
+    console.log('   All automated test suites exited with code 0.\n');
+    process.exit(0);
+  }
 }
 
 main();

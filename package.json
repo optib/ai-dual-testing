@@ -1,14 +1,14 @@
 {
   "name": "ai-dual-testing",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "One-command AI testing skill for Vibe Code projects. Auto-detects your AI tool (Cursor, Antigravity, Claude Code, Windsurf) and injects dual-track verification.",
   "author": "Optib",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/anhsan1001/ai-dual-testing"
+    "url": "https://github.com/optib/ai-dual-testing"
   },
-  "homepage": "https://github.com/anhsan1001/ai-dual-testing#readme",
+  "homepage": "https://github.com/optib/ai-dual-testing#readme",
   "bin": {
     "ai-dual-testing": "./bin/init.js"
   },
@@ -17,6 +17,9 @@
     "templates/",
     "README.md"
   ],
+  "scripts": {
+    "test": "node --test tests/"
+  },
   "keywords": [
     "ai",
     "testing",

@@ -12,5 +12,21 @@
   "reporters": {
     "codeFormat": "json",
     "rtmFormat": "markdown"
+  },
+  "staticAnalysis": {
+    "enforceRealAssertions": true,
+    "tautologicalPatterns": [
+      "^expect\\s*\\(\\s*true\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual)\\s*\\(\\s*true\\s*\\)",
+      "^expect\\s*\\(\\s*false\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual)\\s*\\(\\s*false\\s*\\)",
+      "^expect\\s*\\(\\s*null\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual|toBeNull)\\s*\\(\\s*(?:null)?\\s*\\)",
+      "^expect\\s*\\(\\s*undefined\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual|toBeUndefined)\\s*\\(\\s*(?:undefined)?\\s*\\)",
+      "^expect\\s*\\(\\s*(['\"`])(.*?)\\1\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual)\\s*\\(\\s*\\1\\2\\1\\s*\\)",
+      "^expect\\s*\\(\\s*(\\d+(?:\\.\\d+)?)\\s*\\)\\s*\\.\\s*(?:toBe|toEqual|toStrictEqual)\\s*\\(\\s*\\1\\s*\\)",
+      "^expect\\s*\\(\\s*true\\s*\\)\\s*\\.\\s*toBeTruthy\\s*\\(\\s*\\)",
+      "^expect\\s*\\(\\s*false\\s*\\)\\s*\\.\\s*toBeFalsy\\s*\\(\\s*\\)",
+      "^assert\\s*\\.\\s*(?:strictEqual|equal|deepEqual|deepStrictEqual)\\s*\\(\\s*([^,]+)\\s*,\\s*\\1\\s*\\)",
+      "^assert\\s*\\.\\s*ok\\s*\\(\\s*true\\s*\\)"
+    ],
+    "requireDomOrApiInPlaywright": true
   }
 }
