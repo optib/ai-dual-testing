@@ -22,8 +22,19 @@ interface Thresholds {
   requirementCoverage: { minimum: number };
 }
 
+function deterministicStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(deterministicStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + deterministicStringify(obj[k])).join(',') + '}';
+}
+
 function computeRequirementsChecksum(requirements: any[]): string {
-  const normalized = JSON.stringify(requirements || []);
+  const normalized = deterministicStringify(requirements || []);
   return createHash('sha256').update(normalized).digest('hex');
 }
 
@@ -141,7 +152,7 @@ function main() {
   console.log(`📝 Report: ${OUTPUT_PATH}`);
 
   const codePass = !code.available || code.results.every(r => r.pass);
-  const rtmPass = !rtm.available || rtm.pass;
+  const rtmPass = baseline.count > 0 ? (rtm.available && rtm.pass) : (!rtm.available || rtm.pass);
   const integrityPass = baseline.validChecksum;
 
   console.log(`\n📦 Code: ${code.available ? (codePass ? '✅ PASS' : '❌ FAIL') : '⚠️ N/A'}`);

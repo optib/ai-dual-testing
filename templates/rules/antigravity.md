@@ -22,17 +22,16 @@ description: Smart dual-track verification skill with execution contract and tes
 > `[STEP-N] ✅ Mô tả kết quả`
 > Nếu bước thất bại: `[STEP-N] ❌ Lý do thất bại`
 
-#### STEP 1: Check & Lock Requirements (Chống trôi kết quả)
+#### STEP 1: Check & Auto-Lock Requirements (Chống trôi kết quả & Tự động Ingestion)
 
-**Tool calls bắt buộc:** `read_file` → `.ai-testing/configs/requirements.json`
+**Tool calls bắt buộc:** `read_file` → `.ai-testing/configs/requirements.json` hoặc `run_command` → `npx tsx .ai-testing/scripts/req-manager.ts`
 
-1. Đọc file `.ai-testing/configs/requirements.json`
-2. Nếu `locked: true`:
-   - Dùng ĐÚNG danh sách requirements đã lock và checksum. KHÔNG thêm/bớt/đổi ID hay sửa đổi nội dung.
-3. Nếu `locked: false` hoặc `requirements: []`:
-   - Đọc requirement từ user request ban đầu / PRD / README.
-   - Lập danh sách cố định với ID: R01, R02, R03...
-   - Ghi vào `requirements.json` với `locked: true`, `lockedAt: <timestamp>`
+1. Đọc file `.ai-testing/configs/requirements.json`.
+2. **Nếu có yêu cầu tính năng mới từ user trong hội thoại / PRD chưa có trong requirements.json:**
+   - TỰ ĐỘNG gọi script append: `npx tsx .ai-testing/scripts/req-manager.ts --append "{description}" --ac "{acceptanceCriteria}"`
+   - Script sẽ tự động giữ nguyên các ID cũ (`R01..Rn`), thêm ID mới kế tiếp `R(n+1)...` và tự động cập nhật chữ ký SHA-256 mới.
+3. Nếu file rỗng hoặc `locked: false`:
+   - Trích xuất toàn bộ yêu cầu từ hội thoại và gọi `npx tsx .ai-testing/scripts/req-manager.ts --json '[...]'` để tự động khởi tạo và lock.
 4. Output: `[STEP-1] ✅ Requirements verified: {N} items (locked: {locked})`
 
 #### STEP 2: Code Mapping (Phân tích Codebase)

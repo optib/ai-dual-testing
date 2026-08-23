@@ -21,10 +21,29 @@ interface RequirementItem {
   notes?: string;
 }
 
+function extractTimestamp(filename: string, testedAt?: string): number {
+  if (testedAt) {
+    const t = new Date(testedAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  const match = filename.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
+  if (match) {
+    const d = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`);
+    if (!isNaN(d.getTime())) return d.getTime();
+  }
+  const unixMatch = filename.match(/(\d{10,13})/);
+  if (unixMatch) {
+    const num = parseInt(unixMatch[1], 10);
+    return num < 10000000000 ? num * 1000 : num;
+  }
+  return 0;
+}
+
 interface RTMReport {
   file: string;
   feature: string;
   testedAt: string;
+  timestamp: number;
   requirements: RequirementItem[];
 }
 
@@ -32,10 +51,13 @@ function parseRtmFile(filename: string): RTMReport | null {
   try {
     const raw = readFileSync(resolve(REPORTS_DIR, filename), 'utf-8');
     const data = JSON.parse(raw);
+    const feature = data.feature || filename.replace('.rtm.json', '').replace(/-\d{8}T\d{4}$/, '');
+    const testedAt = data.testedAt || '';
     return {
       file: filename,
-      feature: data.feature || filename.replace('.rtm.json', ''),
-      testedAt: data.testedAt || '',
+      feature,
+      testedAt,
+      timestamp: extractTimestamp(filename, testedAt),
       requirements: data.requirements || [],
     };
   } catch {
@@ -76,8 +98,8 @@ function main() {
   for (const [feature, featureReports] of byFeature.entries()) {
     if (featureReports.length < 2) continue;
 
-    // Sort ascending by file name / testedAt
-    featureReports.sort((a, b) => a.file.localeCompare(b.file));
+    // Sort ascending by timestamp
+    featureReports.sort((a, b) => a.timestamp - b.timestamp || a.file.localeCompare(b.file));
     const previous = featureReports[featureReports.length - 2];
     const current = featureReports[featureReports.length - 1];
 
@@ -120,7 +142,12 @@ function main() {
     console.log('   ✅ RTM history audit: No regressions detected across runs.');
   }
 
+  if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
   writeFileSync(DIFF_REPORT_PATH, lines.join('\n'), 'utf-8');
+
+  if (warnings.length > 0) {
+    process.exit(1);
+  }
 }
 
 main();

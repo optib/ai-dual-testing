@@ -26,18 +26,28 @@ export interface AuditResult {
   violations: AuditViolation[];
 }
 
-const DEFAULT_TAUTOLOGICAL_PATTERNS = [
+export const DEFAULT_TAUTOLOGICAL_PATTERNS = [
   /^expect\s*\(\s*true\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*true\s*\)/,
   /^expect\s*\(\s*false\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*false\s*\)/,
   /^expect\s*\(\s*null\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual|toBeNull)\s*\(\s*(?:null)?\s*\)/,
   /^expect\s*\(\s*undefined\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual|toBeUndefined)\s*\(\s*(?:undefined)?\s*\)/,
   /^expect\s*\(\s*(['"`])(.*?)\1\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*\1\2\1\s*\)/,
   /^expect\s*\(\s*(\d+(?:\.\d+)?)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*\1\s*\)/,
+  /^expect\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*\1\s*\)/,
+  /^expect\s*\(\s*(\d+\s*[\+\-\*\/]\s*\d+)\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)/,
+  /^expect\s*\(\s*typeof\s+['"`][^'"`]+['"`]\s*\)\s*\.\s*(?:toBe|toEqual|toStrictEqual)/,
+  /^expect\s*\(\s*true\s*\)\s*\.\s*not\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*false\s*\)/,
+  /^expect\s*\(\s*false\s*\)\s*\.\s*not\s*\.\s*(?:toBe|toEqual|toStrictEqual)\s*\(\s*true\s*\)/,
   /^expect\s*\(\s*true\s*\)\s*\.\s*toBeTruthy\s*\(\s*\)/,
   /^expect\s*\(\s*false\s*\)\s*\.\s*toBeFalsy\s*\(\s*\)/,
+  /^expect\s*\(\s*(\{\}|\[\])\s*\)\s*\.\s*(?:toBeDefined|toBeTruthy)\s*\(\s*\)/,
   /^assert\s*\.\s*(?:strictEqual|equal|deepEqual|deepStrictEqual)\s*\(\s*([^,]+)\s*,\s*\1\s*\)/,
   /^assert\s*\.\s*ok\s*\(\s*true\s*\)/,
 ];
+
+export function stripComments(code: string): string {
+  return code.replace(/\/\*[\s\S]*?\*\/|([^:]|^)\/\/.*$/gm, '$1');
+}
 
 export function loadTautologicalPatterns(customConfigPath?: string): RegExp[] {
   const configPath = customConfigPath || resolve(process.cwd(), '.ai-testing', 'configs', 'thresholds.json');
@@ -53,15 +63,15 @@ export function loadTautologicalPatterns(customConfigPath?: string): RegExp[] {
   return DEFAULT_TAUTOLOGICAL_PATTERNS;
 }
 
-interface TestBlock {
+export interface TestBlock {
   title: string;
   body: string;
 }
 
 export function extractTestBlocks(code: string): TestBlock[] {
   const blocks: TestBlock[] = [];
-  // Matches test('...', ...) or it('...', ...) with arrow function or function keyword
-  const testHeaderRegex = /(?:test|it)(?:\.only|\.skip)?\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(?:async\s*)?(?:\([^)]*\)|[a-zA-Z0-9_$]+)\s*=>\s*\{/g;
+  // Matches test('...', ...) or it('...', ...) with arrow function, regular function, or async function
+  const testHeaderRegex = /(?:test|it)(?:\.only|\.skip)?\s*\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1\s*,\s*(?:async\s+)?(?:function\s*(?:\w+)?\s*\([^)]*\)|\([^)]*\)|[a-zA-Z0-9_$]+)\s*(?:=>)?\s*\{/g;
 
   let match: RegExpExecArray | null;
   while ((match = testHeaderRegex.exec(code)) !== null) {
@@ -94,22 +104,30 @@ export function isAssertionTautological(assertionLine: string, patterns: RegExp[
 }
 
 export function extractAssertionStatements(testBody: string): string[] {
+  const cleanBody = stripComments(testBody);
   const lines: string[] = [];
   const regex = /(?:expect\s*\(|assert\s*\.)[^;]+;?/g;
   let m: RegExpExecArray | null;
-  while ((m = regex.exec(testBody)) !== null) {
+  while ((m = regex.exec(cleanBody)) !== null) {
     lines.push(m[0].trim());
   }
   return lines;
 }
 
 export function auditTestBlock(test: TestBlock, patterns: RegExp[]): AuditViolation | null {
-  const body = test.body;
-  const assertions = extractAssertionStatements(body);
+  const cleanBody = stripComments(test.body);
+  const assertions = extractAssertionStatements(cleanBody);
 
   // 1. Check if test has zero assertions
-  const hasPageSnapshot = body.includes('screenshot(');
-  if (assertions.length === 0 && !hasPageSnapshot) {
+  const hasPageSnapshot = cleanBody.includes('.screenshot(') || cleanBody.includes('screenshot(');
+  const hasPageInteraction =
+    cleanBody.includes('locator(') ||
+    cleanBody.includes('getBy') ||
+    cleanBody.includes('.goto(') ||
+    cleanBody.includes('.click(') ||
+    cleanBody.includes('.fill(');
+
+  if (assertions.length === 0 && !(hasPageSnapshot && hasPageInteraction)) {
     return {
       testTitle: test.title,
       type: 'NO_ASSERTIONS',
@@ -131,26 +149,26 @@ export function auditTestBlock(test: TestBlock, patterns: RegExp[]): AuditViolat
   }
 
   // 3. Check for hollow Playwright tests (uses page fixture but no DOM/API interactions)
-  const isPlaywrightTest = body.includes('page.') || body.includes('page)');
+  const isPlaywrightTest = cleanBody.includes('page.') || cleanBody.includes('page)');
   if (isPlaywrightTest) {
     const hasDomInteraction =
-      body.includes('locator(') ||
-      body.includes('getBy') ||
-      body.includes('.$') ||
-      body.includes('.click(') ||
-      body.includes('.fill(') ||
-      body.includes('.type(') ||
-      body.includes('.press(') ||
-      body.includes('.check(') ||
-      body.includes('.selectOption(') ||
-      body.includes('.waitFor') ||
-      body.includes('.textContent(') ||
-      body.includes('.innerText(') ||
-      body.includes('.getAttribute(') ||
-      body.includes('.inputValue(') ||
-      body.includes('.evaluate(') ||
-      body.includes('.request.') ||
-      body.includes('.route(');
+      cleanBody.includes('locator(') ||
+      cleanBody.includes('getBy') ||
+      cleanBody.includes('.$') ||
+      cleanBody.includes('.click(') ||
+      cleanBody.includes('.fill(') ||
+      cleanBody.includes('.type(') ||
+      cleanBody.includes('.press(') ||
+      cleanBody.includes('.check(') ||
+      cleanBody.includes('.selectOption(') ||
+      cleanBody.includes('.waitFor') ||
+      cleanBody.includes('.textContent(') ||
+      cleanBody.includes('.innerText(') ||
+      cleanBody.includes('.getAttribute(') ||
+      cleanBody.includes('.inputValue(') ||
+      cleanBody.includes('.evaluate(') ||
+      cleanBody.includes('.request.') ||
+      cleanBody.includes('.route(');
 
     // If only page.goto('/') with no DOM locator/action/content check and tautological assertions
     if (!hasDomInteraction && !hasPageSnapshot) {

@@ -10,6 +10,10 @@ const e2eDir = path.resolve(__dirname, '../e2e');
 const screenshotsDir = path.resolve(__dirname, '../reports/screenshots');
 const htmlReportDir = path.resolve(__dirname, '../reports/playwright-report');
 
+const port = process.env.PORT || '3000';
+const baseURL = process.env.BASE_URL || `http://localhost:${port}`;
+const devCommand = process.env.DEV_SERVER_CMD || 'npm run dev';
+
 export default defineConfig({
   testDir: e2eDir,
   outputDir: screenshotsDir,
@@ -20,7 +24,7 @@ export default defineConfig({
   reporter: [['html', { outputFolder: htmlReportDir, open: 'never' }]],
 
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    baseURL,
     trace: 'on-first-retry',
     screenshot: 'on',
   },
@@ -33,8 +37,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: devCommand,
+    url: baseURL,
     reuseExistingServer: true,
     timeout: 120 * 1000,
   },

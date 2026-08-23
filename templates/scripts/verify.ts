@@ -19,8 +19,19 @@ const SCREENSHOTS_DIR = resolve(REPORTS_DIR, 'screenshots');
 const PKG_PATH = resolve(CWD, 'package.json');
 const REQUIREMENTS_PATH = resolve(ROOT, 'configs', 'requirements.json');
 
+function deterministicStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(deterministicStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + deterministicStringify(obj[k])).join(',') + '}';
+}
+
 function computeRequirementsChecksum(requirements: any[]): string {
-  const normalized = JSON.stringify(requirements || []);
+  const normalized = deterministicStringify(requirements || []);
   return createHash('sha256').update(normalized).digest('hex');
 }
 
@@ -140,7 +151,7 @@ function main() {
   // 4. Execute Automated Tests with STRICT EXIT CODE CHECKING
   if (hasVitest) {
     console.log('\n⚡ Running Vitest Unit Tests (Exit code enforced)...');
-    const result = runCommandStrict('npx vitest run');
+    const result = runCommandStrict('npx vitest run --passWithNoTests');
     if (!result.success) {
       testExecutionFailed = true;
       executionErrors.push('Vitest unit tests failed or crashed with non-zero exit code');
@@ -220,19 +231,28 @@ test('Smoke E2E Test — Homepage UI verification & screenshot', async ({ page }
   const coverageReportScript = resolve(ROOT, 'scripts', 'coverage-report.ts');
   if (existsSync(coverageReportScript)) {
     console.log('\n📊 Generating Dual Coverage Report...');
-    runCommandStrict(`npx tsx "${coverageReportScript}"`);
+    const covResult = runCommandStrict(`npx tsx "${coverageReportScript}"`);
+    if (!covResult.success) {
+      testExecutionFailed = true;
+      executionErrors.push('Coverage report failed (code coverage or requirement coverage below threshold)');
+    }
   }
 
   const diffRtmScript = resolve(ROOT, 'scripts', 'diff-rtm.ts');
   if (existsSync(diffRtmScript)) {
     console.log('\n🔍 Checking RTM History & Regressions...');
-    runCommandStrict(`npx tsx "${diffRtmScript}"`);
+    const diffResult = runCommandStrict(`npx tsx "${diffRtmScript}"`);
+    if (!diffResult.success) {
+      testExecutionFailed = true;
+      executionErrors.push('RTM Historical audit detected regressions or dropped requirements');
+    }
   }
 
   // 7. Final Verdict based on:
   // - Real Exit Codes of Test Runners (Vitest & Playwright)
   // - No Integrity Check Failures
   // - No Static Analysis Dummy Test Violations
+  // - Coverage & Regression thresholds
   const isPass = !testExecutionFailed;
 
   console.log('\n' + '═'.repeat(50));
@@ -241,11 +261,11 @@ test('Smoke E2E Test — Homepage UI verification & screenshot', async ({ page }
     for (const err of executionErrors) {
       console.error(`   - ${err}`);
     }
-    console.error('\nExit code determined by actual test runner status.\n');
+    console.error('\nExit code determined by actual test runner & coverage audit status.\n');
     process.exit(1);
   } else {
     console.log('\n🏁 Verification Result: ✅ PASS');
-    console.log('   All automated test suites exited with code 0.\n');
+    console.log('   All automated test suites and coverage thresholds passed.\n');
     process.exit(0);
   }
 }

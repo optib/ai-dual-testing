@@ -32,9 +32,38 @@ const REPORTS_DIR = resolve(ROOT, 'reports');
 const REQUIREMENTS_PATH = resolve(ROOT, 'configs', 'requirements.json');
 const MASTER_MD_PATH = resolve(REPORTS_DIR, 'master-rtm.md');
 
+function deterministicStringify(obj: any): string {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(deterministicStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + deterministicStringify(obj[k])).join(',') + '}';
+}
+
 function computeRequirementsChecksum(requirements: any[]): string {
-  const normalized = JSON.stringify(requirements || []);
+  const normalized = deterministicStringify(requirements || []);
   return createHash('sha256').update(normalized).digest('hex');
+}
+
+export function extractTimestamp(filename: string, testedAt?: string): number {
+  if (testedAt) {
+    const t = new Date(testedAt).getTime();
+    if (!isNaN(t)) return t;
+  }
+  const match = filename.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/);
+  if (match) {
+    const d = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`);
+    if (!isNaN(d.getTime())) return d.getTime();
+  }
+  const unixMatch = filename.match(/(\d{10,13})/);
+  if (unixMatch) {
+    const num = parseInt(unixMatch[1], 10);
+    return num < 10000000000 ? num * 1000 : num;
+  }
+  return 0;
 }
 
 // ─── Load baseline requirements ──────────────────────────
@@ -68,12 +97,13 @@ function scanLatestRTMFiles(): FeatureRTM[] {
   );
 
   // Group by feature name to pick only the latest timestamped report per feature
-  const latestByFeature = new Map<string, { file: string; data: FeatureRTM }>();
+  const latestByFeature = new Map<string, { file: string; timestamp: number; data: FeatureRTM }>();
 
   for (const file of files) {
     try {
       const parsed: any = JSON.parse(readFileSync(resolve(REPORTS_DIR, file), 'utf-8'));
-      const featureName = parsed.feature || file.replace(/\.rtm\.json$/, '');
+      const featureName = parsed.feature || file.replace(/\.rtm\.json$/, '').replace(/-\d{8}T\d{4}$/, '');
+      const timestamp = extractTimestamp(file, parsed.testedAt);
       const rtmObj: FeatureRTM = {
         feature: featureName,
         file: file,
@@ -81,8 +111,8 @@ function scanLatestRTMFiles(): FeatureRTM[] {
       };
 
       const existing = latestByFeature.get(featureName);
-      if (!existing || file.localeCompare(existing.file) > 0) {
-        latestByFeature.set(featureName, { file, data: rtmObj });
+      if (!existing || timestamp >= existing.timestamp) {
+        latestByFeature.set(featureName, { file, timestamp, data: rtmObj });
       }
     } catch (e) {
       console.warn(`⚠️  Could not parse ${file}: ${(e as Error).message}`);

@@ -215,12 +215,12 @@ test('Initial Test 1 — Existing feature test', async () => {
     fs.mkdirSync(binDir, { recursive: true });
 
     if (process.platform === 'win32') {
-      fs.writeFileSync(path.join(binDir, 'vitest.cmd'), '@echo off\nexit /b 1\n');
-    } else {
-      const shPath = path.join(binDir, 'vitest');
-      fs.writeFileSync(shPath, '#!/bin/sh\nexit 1\n');
-      fs.chmodSync(shPath, 0o755);
+      fs.writeFileSync(path.join(binDir, 'vitest.cmd'), '@node -e "process.exit(1)"\n');
+      fs.writeFileSync(path.join(binDir, 'vitest.ps1'), 'exit 1\n');
     }
+    const shPath = path.join(binDir, 'vitest');
+    fs.writeFileSync(shPath, '#!/bin/sh\nexit 1\n');
+    try { fs.chmodSync(shPath, 0o755); } catch {}
 
     const verifyScript = path.join(__dirname, '..', 'templates', 'scripts', 'verify.ts');
     const result = spawnSync('npx', ['tsx', verifyScript], {
@@ -361,5 +361,129 @@ test('bypassed dummy test', async () => {
       result.stdout.includes('STATIC AUDIT FAILED') || result.stderr.includes('STATIC AUDIT FAILED'),
       'Output should log Layer 2 static audit failure'
     );
+  });
+
+  test('updateGitignore scopes to .ai-testing/reports/ and preserves configs & e2e', () => {
+    const { updateGitignore } = require('../bin/init.js');
+    updateGitignore(tmpDir);
+
+    const gitignorePath = path.join(tmpDir, '.gitignore');
+    assert.ok(fs.existsSync(gitignorePath));
+    const content = fs.readFileSync(gitignorePath, 'utf-8');
+    assert.ok(content.includes('.ai-testing/reports/'), 'Should ignore .ai-testing/reports/');
+    assert.ok(!content.includes('\n.ai-testing/\n') && !content.endsWith('\n.ai-testing/'), 'Should NOT ignore entire .ai-testing/');
+  });
+
+  test('Anti-Dummy: test-writer.ts REJECTS tautological test written with function syntax', () => {
+    scaffold(tmpDir);
+
+    const writerScript = path.join(__dirname, '..', 'templates', 'scripts', 'test-writer.ts');
+    const dummyFunctionSnippet = `test('function syntax fake test', async function() {
+  expect(true).toBe(true);
+});`;
+    const tempFile = path.join(tmpDir, 'dummy-func-test.ts');
+    fs.writeFileSync(tempFile, dummyFunctionSnippet, 'utf-8');
+
+    const result = spawnSync('npx', ['tsx', writerScript, '--feature', 'auth', '--file', tempFile], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    assert.strictEqual(result.status, 1, 'test-writer should reject tautological test in function syntax');
+  });
+
+  test('Anti-Dummy: Comments with screenshot keyword DO NOT bypass empty test audit', () => {
+    scaffold(tmpDir);
+
+    const writerScript = path.join(__dirname, '..', 'templates', 'scripts', 'test-writer.ts');
+    const commentedSnippet = `test('comment bypass attempt', async () => {
+  // await page.screenshot({ path: 'test.png' });
+});`;
+    const tempFile = path.join(tmpDir, 'comment-bypass.ts');
+    fs.writeFileSync(tempFile, commentedSnippet, 'utf-8');
+
+    const result = spawnSync('npx', ['tsx', writerScript, '--feature', 'auth', '--file', tempFile], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    assert.strictEqual(result.status, 1, 'test-writer should reject test with only commented assertions');
+  });
+
+  test('Anti-Dummy: test-writer.ts REJECTS variable comparing to itself expect(x).toBe(x)', () => {
+    scaffold(tmpDir);
+
+    const writerScript = path.join(__dirname, '..', 'templates', 'scripts', 'test-writer.ts');
+    const selfCompareSnippet = `test('self compare test', async () => {
+  const result = 42;
+  expect(result).toBe(result);
+});`;
+    const tempFile = path.join(tmpDir, 'self-compare.ts');
+    fs.writeFileSync(tempFile, selfCompareSnippet, 'utf-8');
+
+    const result = spawnSync('npx', ['tsx', writerScript, '--feature', 'auth', '--file', tempFile], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    assert.strictEqual(result.status, 1, 'test-writer should reject expect(x).toBe(x)');
+  });
+
+  // ─── AUTO-REQUIREMENT INGESTION & REQ-MANAGER TESTS ────
+
+  test('req-manager.ts: Appending requirement to empty file creates R01 and valid SHA-256 hash', () => {
+    scaffold(tmpDir);
+
+    const reqManagerScript = path.join(__dirname, '..', 'templates', 'scripts', 'req-manager.ts');
+    const result = spawnSync('npx', ['tsx', reqManagerScript, '--append', 'User can register with email', '--ac', 'Sends confirmation email'], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    assert.strictEqual(result.status, 0, 'req-manager should succeed');
+    const reqFile = path.join(tmpDir, '.ai-testing', 'configs', 'requirements.json');
+    assert.ok(fs.existsSync(reqFile));
+
+    const data = JSON.parse(fs.readFileSync(reqFile, 'utf-8'));
+    assert.strictEqual(data.locked, true);
+    assert.strictEqual(data.requirements.length, 1);
+    assert.strictEqual(data.requirements[0].id, 'R01');
+    assert.strictEqual(data.requirements[0].description, 'User can register with email');
+    assert.strictEqual(data.checksum, computeChecksum(data.requirements));
+  });
+
+  test('req-manager.ts: Appending requirement preserves existing R01 and generates R02 with updated hash', () => {
+    scaffold(tmpDir);
+
+    const reqManagerScript = path.join(__dirname, '..', 'templates', 'scripts', 'req-manager.ts');
+
+    // Add Req 1
+    spawnSync('npx', ['tsx', reqManagerScript, '--append', 'User can register', '--ac', 'AC1'], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    // Add Req 2
+    const result2 = spawnSync('npx', ['tsx', reqManagerScript, '--append', 'User can login', '--ac', 'AC2'], {
+      cwd: tmpDir,
+      encoding: 'utf-8',
+      shell: true,
+    });
+
+    assert.strictEqual(result2.status, 0);
+    const reqFile = path.join(tmpDir, '.ai-testing', 'configs', 'requirements.json');
+    const data = JSON.parse(fs.readFileSync(reqFile, 'utf-8'));
+
+    assert.strictEqual(data.requirements.length, 2);
+    assert.strictEqual(data.requirements[0].id, 'R01');
+    assert.strictEqual(data.requirements[0].description, 'User can register');
+    assert.strictEqual(data.requirements[1].id, 'R02');
+    assert.strictEqual(data.requirements[1].description, 'User can login');
+    assert.strictEqual(data.checksum, computeChecksum(data.requirements));
   });
 });

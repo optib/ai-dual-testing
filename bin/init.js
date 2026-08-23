@@ -106,8 +106,19 @@ function detectProject(targetDir = CWD) {
 }
 
 // ─── Compute Checksum ───────────────────────────────────
+function deterministicStringify(obj) {
+  if (obj === null || typeof obj !== 'object') {
+    return JSON.stringify(obj);
+  }
+  if (Array.isArray(obj)) {
+    return '[' + obj.map(deterministicStringify).join(',') + ']';
+  }
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map(k => JSON.stringify(k) + ':' + deterministicStringify(obj[k])).join(',') + '}';
+}
+
 function computeChecksum(obj) {
-  const normalized = JSON.stringify(obj || []);
+  const normalized = deterministicStringify(obj || []);
   return crypto.createHash('sha256').update(normalized).digest('hex');
 }
 
@@ -219,7 +230,8 @@ function updateGitignore(targetDir = CWD) {
   const gitignorePath = path.join(targetDir, '.gitignore');
   const entries = [
     '# AI Dual-Track Testing — ignore local artifacts & reports',
-    '.ai-testing/',
+    '.ai-testing/reports/',
+    '.ai-testing/temp/',
     'test-results/',
     'playwright-report/',
     'coverage/',
@@ -228,8 +240,15 @@ function updateGitignore(targetDir = CWD) {
   const block = entries.join('\n');
 
   if (fs.existsSync(gitignorePath)) {
-    const content = fs.readFileSync(gitignorePath, 'utf-8');
-    if (content.includes('.ai-testing/reports') || content.includes('.ai-testing/')) {
+    let content = fs.readFileSync(gitignorePath, 'utf-8');
+    // If old broad .ai-testing/ was present, replace it with specific reports/
+    if (content.includes('\n.ai-testing/\n') || content.includes('\n.ai-testing/\r\n') || content.trim() === '.ai-testing/') {
+      content = content.replace(/(?:^|\n)\.ai-testing\/(?=\n|\r|$)/g, '\n.ai-testing/reports/\n.ai-testing/temp/');
+      fs.writeFileSync(gitignorePath, content, 'utf-8');
+      console.log(c.green(`   ✅ Updated .gitignore (refined .ai-testing/ scope)`));
+      return;
+    }
+    if (content.includes('.ai-testing/reports/') || content.includes('.ai-testing/reports')) {
       return;
     }
     fs.appendFileSync(gitignorePath, `\n\n${block}\n`, 'utf-8');
@@ -340,12 +359,27 @@ function handleLockCommand(args, targetBaseDir = CWD) {
     }
   } catch {
     // Parse line by line or numbered list
+  }
+
+  // Check if existing locked requirements exist for append mode
+  const isAppendMode = args.includes('--append');
+  let existingList = [];
+  if (fs.existsSync(reqFilePath)) {
+    try {
+      const existingData = JSON.parse(fs.readFileSync(reqFilePath, 'utf-8'));
+      if (Array.isArray(existingData.requirements)) {
+        existingList = existingData.requirements;
+      }
+    } catch {}
+  }
+
+  if (requirementsList.length === 0) {
     const lines = rawInput.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    let index = 1;
+    let startIndex = isAppendMode ? existingList.length + 1 : 1;
     for (const line of lines) {
       const cleanText = line.replace(/^(\d+[\.\)]|-|\*)\s*/, '');
       if (cleanText) {
-        const id = `R${String(index).padStart(2, '0')}`;
+        const id = `R${String(startIndex).padStart(2, '0')}`;
         requirementsList.push({
           id,
           description: cleanText,
@@ -354,7 +388,7 @@ function handleLockCommand(args, targetBaseDir = CWD) {
           type: 'FUNCTIONAL',
           source: 'cli_lock',
         });
-        index++;
+        startIndex++;
       }
     }
   }
@@ -364,23 +398,24 @@ function handleLockCommand(args, targetBaseDir = CWD) {
     process.exit(1);
   }
 
-  const checksum = computeChecksum(requirementsList);
+  const finalRequirements = isAppendMode ? [...existingList, ...requirementsList] : requirementsList;
+  const checksum = computeChecksum(finalRequirements);
   const data = {
-    version: '1.1.0',
+    version: '1.2.0',
     locked: true,
     lockedAt: new Date().toISOString(),
     checksum: checksum,
     description: 'Master Requirements — Locked upfront with SHA-256 checksum',
-    requirements: requirementsList,
+    requirements: finalRequirements,
   };
 
   fs.writeFileSync(reqFilePath, JSON.stringify(data, null, 2), 'utf-8');
 
-  console.log(c.green(`✅ Successfully locked ${requirementsList.length} requirement(s)!`));
+  console.log(c.green(`✅ Successfully locked ${finalRequirements.length} requirement(s)!`));
   console.log(`   File:     ${c.bold('.ai-testing/configs/requirements.json')}`);
   console.log(`   Checksum: ${c.bold(checksum)}`);
   console.log('');
-  requirementsList.forEach(r => {
+  finalRequirements.forEach(r => {
     console.log(`   - [${r.id}] ${r.description}`);
   });
   console.log('');
@@ -515,5 +550,6 @@ module.exports = {
   scaffold,
   computeChecksum,
   handleLockCommand,
+  updateGitignore,
   AI_TOOLS,
 };
