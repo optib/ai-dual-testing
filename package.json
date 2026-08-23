@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/optib/ai-dual-testing"
+    "url": "git+https://github.com/optib/ai-dual-testing.git"
   },
   "homepage": "https://github.com/optib/ai-dual-testing#readme",
   "bin": {
-    "ai-dual-testing": "./bin/init.js"
+    "ai-dual-testing": "bin/init.js"
   },
   "files": [
     "bin/",
