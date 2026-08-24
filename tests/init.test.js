@@ -56,6 +56,29 @@ describe('AI Dual-Testing Core Logic & Verification Integrity', () => {
     assert.strictEqual(tool.name, 'Antigravity');
   });
 
+  test('detectProject detects TypeScript and missing @types/node', () => {
+    fs.writeFileSync(path.join(tmpDir, 'tsconfig.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({
+      dependencies: { next: '^14.0.0' },
+      devDependencies: { vitest: '^1.0.0' }
+    }));
+    const project = detectProject(tmpDir);
+    assert.strictEqual(project.language, 'typescript');
+    assert.strictEqual(project.framework, 'nextjs');
+    assert.strictEqual(project.hasTypesNode, false);
+    assert.strictEqual(project.hasVitest, true);
+  });
+
+  test('detectProject detects existing @types/node', () => {
+    fs.writeFileSync(path.join(tmpDir, 'tsconfig.json'), '{}');
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({
+      devDependencies: { '@types/node': '^20.0.0' }
+    }));
+    const project = detectProject(tmpDir);
+    assert.strictEqual(project.language, 'typescript');
+    assert.strictEqual(project.hasTypesNode, true);
+  });
+
   test('injectRules is idempotent (no duplication when run multiple times)', () => {
     const claudeTool = AI_TOOLS.find(t => t.name === 'Claude Code');
     const targetFile = path.join(tmpDir, 'CLAUDE.md');

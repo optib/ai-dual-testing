@@ -98,8 +98,9 @@ function detectProject(targetDir = CWD) {
     const hasVitest = !!allDeps['vitest'];
     const hasPlaywright = !!allDeps['@playwright/test'];
     const hasTsx = !!allDeps['tsx'];
+    const hasTypesNode = !!allDeps['@types/node'];
 
-    return { framework, language, deps: allDeps, hasVitest, hasPlaywright, hasTsx };
+    return { framework, language, deps: allDeps, hasVitest, hasPlaywright, hasTsx, hasTypesNode };
   } catch {
     return { framework: 'generic', language: 'javascript' };
   }
@@ -273,6 +274,7 @@ function installTestingTools(project, targetDir = CWD) {
   if (!project.hasVitest) toInstall.push('vitest');
   if (!project.hasPlaywright) toInstall.push('@playwright/test');
   if (!project.hasTsx) toInstall.push('tsx');
+  if (project.language === 'typescript' && !project.hasTypesNode) toInstall.push('@types/node');
 
   if (toInstall.length === 0) {
     console.log(c.green('   ✅ All testing tools already installed'));
