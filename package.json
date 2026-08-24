@@ -1,6 +1,6 @@
 {
   "name": "ai-dual-testing",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "One-command AI testing skill for Vibe Code projects. Auto-detects your AI tool (Cursor, Antigravity, Claude Code, Windsurf) and injects dual-track verification.",
   "author": "Optib",
   "license": "MIT",
